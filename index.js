@@ -6,62 +6,69 @@ const { formatError } = require('apollo-errors');
 const cors = require('cors');
 const jwt = require('express-jwt');
 const faker = require('faker/locale/en');
-const casual = require('casual');
 const compression = require('compression');
+const next = require('next');
 
 const typeDefs = require('./server/typeDefs');
 const resolvers = require('./server/resolvers');
 const initQuery = require('./server/initQuery');
-const { sslRedirect } = require('./server/utils');
 
 const {
-  PORT = 5000,
-  JWT_SECRET = 'bufb73f3f084f3487f7803fn30f34bf0n3fb3f83'
+  JWT_SECRET = 'bufb73f3f084f3487f7803fn30f34bf0n3fb3f83',
+  PORT = 5000
 } = process.env;
+
+const port = parseInt(PORT);
+const dev = process.env.NODE_ENV !== 'production';
+const app = next({ dev });
+const handle = app.getRequestHandler();
 
 const schema = makeExecutableSchema({
   typeDefs,
   resolvers
 });
 
-const app = express();
+app.prepare().then(() => {
+  const server = express();
 
-const isDeveloping = app.get('env') === 'development';
+  if (!dev) {
+    server.disable('x-powered-by');
+    server.use(compression());
+  }
 
-if (!isDeveloping) {
-  app.disable('x-powered-by');
-  app.use(compression());
-}
+  server.use(cors());
 
-app.use(cors());
+  server.use(
+    '/graphql',
+    jwt({
+      secret: JWT_SECRET,
+      credentialsRequired: false
+    }),
+    bodyParser.json(),
+    graphqlExpress(req => ({
+      formatError,
+      schema,
+      context: {
+        jwtSecret: JWT_SECRET,
+        faker,
+        user: req.user
+      }
+    }))
+  );
 
-app.use(
-  '/graphql',
-  jwt({
-    secret: JWT_SECRET,
-    credentialsRequired: false
-  }),
-  bodyParser.json(),
-  graphqlExpress(req => ({
-    formatError,
-    schema,
-    context: {
-      jwtSecret: JWT_SECRET,
-      faker,
-      casual,
-      user: req.user
-    }
-  }))
-);
+  server.get(
+    '/graphiql',
+    graphiqlExpress({
+      endpointURL: '/graphql',
+      query: initQuery
+    })
+  );
 
-app.get(
-  '/',
-  graphiqlExpress({
-    endpointURL: '/graphql',
-    query: initQuery
-  })
-);
+  server.get('*', (req, res) => handle(req, res));
 
-app.listen(PORT, () => {
-  console.log(`Listening on PORT ${PORT}`);
+  server.listen(PORT, err => {
+    if (err) throw err;
+
+    console.log(`Listening on PORT ${PORT}`);
+  });
 });
